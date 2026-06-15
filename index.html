@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ 纯净单文件词典</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        body { background: radial-gradient(circle at top, #0f172a 0%, #020617 100%); color: #f1f5f9; transition: background 0.3s, color 0.3s; }
+        body.light-mode { background: #fefce8; color: #1e293b; }
+        body.light-mode .bg-slate-900\/60 { background: rgba(241, 245, 249, 0.8); border-color: #e2e8f0; }
+        body.light-mode .bg-slate-900\/40 { background: rgba(241, 245, 249, 0.5); border-color: #e2e8f0; }
+        body.light-mode .bg-slate-950\/80 { background: #ffffff; border-color: #cbd5e1; color: #0f172a; }
+        body.light-mode .bg-slate-900 { background: #f8fafc; border-color: #e2e8f0; }
+        body.light-mode .text-slate-400 { color: #64748b; }
+        body.light-mode .text-slate-300 { color: #334155; }
+        body.light-mode .text-white { color: #0f172a; }
+        body.light-mode .border-slate-800 { border-color: #e2e8f0; }
+        body.light-mode .text-emerald-400 { color: #059669; }
+        /* 保护并提亮原 MDX 词典中的 HTML 排版颜色，全面适配深色背景 */
+        .mdx-content font[color="red" i], .mdx-content font[color="#ff0000" i], .mdx-content .red { color: #f43f5e !important; }
+        .mdx-content font[color="blue" i], .mdx-content font[color="#0000ff" i], .mdx-content font[color="#000080" i], .mdx-content font[color="navy" i], .mdx-content .blue, .mdx-content [style*="color: blue" i], .mdx-content [style*="color:#0000ff" i], .mdx-content [style*="color: #0000ff" i] { color: #60a5fa !important; }
+        .mdx-content font[color="green" i], .mdx-content font[color="#008000" i], .mdx-content .green { color: #34d399 !important; }
+        .mdx-content font[color="black" i], .mdx-content font[color="#000000" i], .mdx-content [style*="color: black" i], .mdx-content [style*="color:#000000" i], .mdx-content [style*="color: #000000" i] { color: #e2e8f0 !important; }
+    </style>
+</head>
+<body class="min-h-screen p-4 flex flex-col items-center justify-start font-sans">
+
+    <div class="w-full max-w-2xl mt-8">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-xl font-bold text-slate-400 tracking-wider">⚡ PURE DICT</h1>
+            <button onclick="document.body.classList.toggle('light-mode')" class="ml-auto mr-3 px-3 py-1.5 bg-slate-800 rounded-lg text-xs text-slate-400">🌓 切换主题</button>
+            <div class="relative">
+                <button onclick="this.nextElementSibling.classList.toggle('hidden')" class="px-3 py-1.5 bg-slate-800 rounded-lg text-xs text-slate-400 hover:bg-slate-700">⚙️ 设置</button>
+                <div class="absolute right-0 top-full mt-2 w-64 bg-slate-900 p-4 border border-slate-700 rounded-xl hidden z-50">
+                    <div id="db-status" class="text-xs text-amber-400 mb-3">正在连接本地 IndexedDB...</div>
+                    <input type="file" id="file-picker" accept=".json" class="hidden" onchange="importDataToDB(this)">
+                    <button id="import-btn" onclick="document.getElementById('file-picker').click()" class="w-full hidden cursor-pointer px-3 py-2 bg-emerald-600 text-white font-bold text-xs rounded-lg">导入本地 JSON</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-slate-900/60 backdrop-blur-md border border-slate-800 rounded-2xl p-4 shadow-2xl mb-6">
+
+            <div class="relative">
+                <input 
+                    type="text" 
+                    id="search-input" 
+                    oninput="searchWord(this.value)"
+                    placeholder="等待词库初始化..." 
+                    disabled
+                    class="w-full px-5 py-4 bg-slate-950/80 border-2 border-slate-800 rounded-xl text-emerald-400 font-mono text-lg outline-none focus:border-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+            </div>
+        </div>
+
+        <div id="result-box" class="hidden bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 shadow-xl text-slate-300 leading-relaxed mdx-content"></div>
+    </div>
+
+    <script>
+        const DB_NAME = "MyPureDictDB";
+        const STORE_NAME = "words";
+        let db;
+
+        // 1. 初始化 IndexedDB
+        const request = indexedDB.open(DB_NAME, 1);
+        
+        request.onupgradeneeded = (event) => {
+            const tempDb = event.target.result;
+            if (!tempDb.objectStoreNames.contains(STORE_NAME)) {
+                tempDb.createObjectStore(STORE_NAME, { keyPath: "word" });
+            }
+        };
+
+        request.onsuccess = (event) => {
+            db = event.target.result;
+            checkDatabase();
+        };
+
+        // 2. 检查数据库里有没有词
+        function checkDatabase() {
+            const transaction = db.transaction([STORE_NAME], "readonly");
+            const store = transaction.objectStore(STORE_NAME);
+            const countRequest = store.count();
+            
+            countRequest.onsuccess = () => {
+                const count = countRequest.result;
+                const statusEl = document.getElementById('db-status');
+                const importBtn = document.getElementById('import-btn');
+                const searchInp = document.getElementById('search-input');
+
+                if (count > 0) {
+                    // 数据库里有货，直接解锁可用，完美隐藏导入按钮！
+                    statusEl.textContent = `✅ 引擎就绪！已缓存 ${count} 个词条`;
+                    statusEl.className = "text-xs text-emerald-400 mt-0.5";
+                    importBtn.classList.add('hidden');
+                    
+                    searchInp.disabled = false;
+                    searchInp.placeholder = "输入单词，享受 IndexedDB 瞬发检索...";
+                    searchInp.focus();
+                } else {
+                    // 数据库空空如也，提示用户导入
+                    statusEl.textContent = "⚠️ 词库未挂载，请导入提纯后的 JSON 文件";
+                    statusEl.className = "text-xs text-rose-400 mt-0.5";
+                    importBtn.classList.remove('hidden');
+                }
+            };
+        }
+
+        // 3. 将 310MB 的 JSON 解析并暴力灌入 IndexedDB
+        function importDataToDB(input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            const statusEl = document.getElementById('db-status');
+            const importBtn = document.getElementById('import-btn');
+            
+            statusEl.textContent = "⏳ 正在将大文件灌入浏览器原生数据库，请勿关闭网页 (约需几秒)...";
+            statusEl.className = "text-xs text-amber-400 mt-0.5";
+            importBtn.classList.add('hidden');
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    const transaction = db.transaction([STORE_NAME], "readwrite");
+                    const store = transaction.objectStore(STORE_NAME);
+                    
+                    let importedCount = 0;
+                    // 开始极速写入
+                    for (const [key, value] of Object.entries(data)) {
+                        store.put({ word: key.toLowerCase(), translation: value.translation });
+                        importedCount++;
+                    }
+
+                    transaction.oncomplete = () => {
+                        alert(`🎉 导入大成功！${importedCount} 个词条已永久存入浏览器 IndexedDB 数据库！以后打开即用！`);
+                        checkDatabase(); // 重新检查状态并解锁搜索框
+                    };
+
+                    transaction.onerror = () => {
+                        alert("写入数据库时发生错误！");
+                        checkDatabase();
+                    };
+                } catch (err) {
+                    alert("JSON 解析失败！请确保文件格式正确。");
+                    checkDatabase();
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // 4. 实时搜索：支持词形还原的智能检索
+        let debounceTimer;
+        function searchWord(query) {
+            clearTimeout(debounceTimer);
+            const word = query.trim().toLowerCase();
+            const resultBox = document.getElementById('result-box');
+
+            if (!word) {
+                resultBox.classList.add('hidden');
+                return;
+            }
+
+            debounceTimer = setTimeout(() => {
+                // 词形还原逻辑：生成可能的词根列表
+                const getCandidates = (w) => {
+                    const c = new Set([w]);
+                    if (w.length < 3) return [w];
+                    if (w.endsWith('ies')) c.add(w.slice(0, -3) + 'y');
+                    if (w.endsWith('ied')) c.add(w.slice(0, -3) + 'y');
+                    if (w.endsWith('ing')) {
+                        c.add(w.slice(0, -3));
+                        c.add(w.slice(0, -3) + 'e');
+                        if (w.length > 5 && w[w.length-4] === w[w.length-5]) c.add(w.slice(0, -4));
+                    }
+                    if (w.endsWith('ed')) { c.add(w.slice(0, -2)); c.add(w.slice(0, -1)); }
+                    if (w.endsWith('es')) c.add(w.slice(0, -2));
+                    if (w.endsWith('s') && !w.endsWith('ss')) c.add(w.slice(0, -1));
+                    if (w.endsWith('er')) c.add(w.slice(0, -2));
+                    if (w.endsWith('est')) c.add(w.slice(0, -3));
+                    return Array.from(c);
+                };
+
+                const candidates = getCandidates(word);
+                const transaction = db.transaction([STORE_NAME], "readonly");
+                const store = transaction.objectStore(STORE_NAME);
+                
+                // 递归尝试查找候选词
+                const tryFind = (index) => {
+                    if (index >= candidates.length) {
+                        resultBox.classList.remove('hidden');
+                        resultBox.innerHTML = '<div class="text-slate-500 font-medium py-2">... 词库中未检索到该词条 ...</div>';
+                        return;
+                    }
+
+                    const request = store.get(candidates[index]);
+                    request.onsuccess = (e) => {
+                        const result = e.target.result;
+                        if (result) {
+                            resultBox.classList.remove('hidden');
+                            const matchTip = (result.word !== word) ? `<span class="text-sm font-normal text-amber-500/80 ml-3">→ ${result.word}</span>` : '';
+                            resultBox.innerHTML = 
+                                `<div class="text-3xl font-black text-white font-mono border-b border-slate-800/80 pb-3 mb-4 flex items-baseline">${word}${matchTip}</div>` +
+                                `<div class="text-base text-slate-300">${result.translation}</div>`;
+                        } else {
+                            tryFind(index + 1);
+                        }
+                    };
+                };
+
+                tryFind(0);
+            }, 80);
+        }
+    </script>
+</body>
+</html>
